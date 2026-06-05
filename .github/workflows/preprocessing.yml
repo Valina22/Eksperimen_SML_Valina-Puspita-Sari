@@ -8,7 +8,7 @@ on:
     paths:
       - 'dataset_raw/**'
       - 'preprocessing/automate_Valina-Puspita-Sari.py'
-      - '.github/workflows/preprocess.yml'
+      - '.github/workflows/preprocessing.yml'
   workflow_dispatch:
     inputs:
       scaler:
