@@ -1,0 +1,143 @@
+name: Automated Preprocessing Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'dataset_raw/**'
+      - 'preprocessing/automate_Valina-Puspita-Sari.py'
+      - '.github/workflows/preprocess.yml'
+  workflow_dispatch:
+    inputs:
+      scaler:
+        description: 'Scaler type (standard/minmax/robust)'
+        required: false
+        default: 'standard'
+      outlier_method:
+        description: 'Outlier method (iqr/zscore)'
+        required: false
+        default: 'iqr'
+
+jobs:
+  preprocessing:
+    name: Run Preprocessing Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 2. Python setup ──────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # ── 3. Install dependencies ───────────────────────────────
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── 4. Verify dataset exists ──────────────────────────────
+      - name: Verify dataset
+        run: |
+          if [ ! -f "dataset_raw/heart.csv" ]; then
+            echo "ERROR: dataset_raw/heart.csv not found!"
+            exit 1
+          fi
+          echo "Dataset found: $(wc -l < dataset_raw/heart.csv) lines"
+
+      # ── 5. Run preprocessing ──────────────────────────────────
+      - name: Run preprocessing pipeline
+        run: |
+          python preprocessing/automate_Valina-Puspita-Sari.py \
+            --input dataset_raw/heart.csv \
+            --output_dir preprocessing/dataset_preprocessing \
+            --eda_dir preprocessing/eda_output \
+            --scaler ${{ github.event.inputs.scaler || 'standard' }} \
+            --outlier_method ${{ github.event.inputs.outlier_method || 'iqr' }} \
+            --test_size 0.2 \
+            --val_size 0.1 \
+            --random_state 42
+
+      # ── 6. Verify outputs ─────────────────────────────────────
+      - name: Verify preprocessed outputs
+        run: |
+          echo "=== Checking output files ==="
+          for f in preprocessing/dataset_preprocessing/train.csv \
+                   preprocessing/dataset_preprocessing/val.csv \
+                   preprocessing/dataset_preprocessing/test.csv; do
+            if [ -f "$f" ]; then
+              echo "✓ $f — $(wc -l < $f) lines"
+            else
+              echo "✗ MISSING: $f"
+              exit 1
+            fi
+          done
+
+      # ── 7. Upload EDA artifacts ───────────────────────────────
+      - name: Upload EDA artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: eda-plots-${{ github.run_number }}
+          path: preprocessing/eda_output/
+          retention-days: 30
+
+      # ── 8. Upload preprocessed datasets ─────────────────────
+      - name: Upload preprocessed datasets
+        uses: actions/upload-artifact@v4
+        with:
+          name: preprocessed-datasets-${{ github.run_number }}
+          path: preprocessing/dataset_preprocessing/
+          retention-days: 30
+
+      # ── 9. Commit results back to repo ───────────────────────
+      - name: Configure git
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "GitHub Actions Bot"
+
+      - name: Commit preprocessed datasets
+        run: |
+          git add preprocessing/dataset_preprocessing/
+          git add preprocessing/eda_output/ || true
+          git add logs/ || true
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit — datasets are up to date"
+          else
+            TIMESTAMP=$(date +'%Y-%m-%d %H:%M:%S UTC')
+            git commit -m "🤖 Auto-preprocess: update datasets [${TIMESTAMP}]
+
+            Triggered by: ${{ github.actor }}
+            Scaler: ${{ github.event.inputs.scaler || 'standard' }}
+            Outlier method: ${{ github.event.inputs.outlier_method || 'iqr' }}
+            Run ID: ${{ github.run_id }}"
+
+            git push
+            echo "✓ Committed and pushed preprocessed datasets"
+          fi
+
+      # ── 10. Summary ───────────────────────────────────────────
+      - name: Print pipeline summary
+        run: |
+          echo "═══════════════════════════════════════"
+          echo "  PREPROCESSING PIPELINE SUMMARY"
+          echo "═══════════════════════════════════════"
+          echo ""
+          echo "Train set  : $(wc -l < preprocessing/dataset_preprocessing/train.csv) rows"
+          echo "Val set    : $(wc -l < preprocessing/dataset_preprocessing/val.csv) rows"
+          echo "Test set   : $(wc -l < preprocessing/dataset_preprocessing/test.csv) rows"
+          echo ""
+          echo "Features   : $(head -1 preprocessing/dataset_preprocessing/train.csv | tr ',' '\n' | wc -l) columns"
+          echo ""
+          echo "Status: SUCCESS ✓"
